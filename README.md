@@ -1,83 +1,86 @@
-# Respiratory Dynamics Analysis Toolkit
+# HLG: Loop Gain Estimation for Sleep-Disordered Breathing
 
-## Overview
-This MATLAB codebase implements algorithms for analyzing respiratory dynamics during sleep, with a focus on modeling ventilatory control using the Mackey-Glass equations and Expectation-Maximization (EM) algorithm. The package is designed to process respiratory data to identify and quantify physiological parameters related to sleep apnea and breathing control.
+Automated estimation of ventilatory loop gain (LG) and its control parameters from respiratory inductance plethysmography (RIP) signals during sleep.
 
-## License
-This code is licensed under CC BY-NC 4.0 (Attribution-NonCommercial 4.0). Commercial use is prohibited. See the LICENSE file for full details.
+This repository contains the complete codebase for the method described in:
 
-## Key Features
-- Modeling of respiratory dynamics using Mackey-Glass equations
-- Parameter estimation via EM algorithm
-- Analysis of arousal events during sleep
-- Loop gain estimation for respiratory control stability assessment
-- Separate analysis for REM and NREM sleep stages
-- Support for parallel processing to speed up analysis
+> Nassi T, Amidi Y, Oppersma E, Donker DW, Redeker NS, Westover MB, Thomas RJ.
+> **Unraveling sleep apnea dynamics: quantifying loop gain using dynamical modeling of ventilatory control.**
+> *SLEEP*, 2026, 49(2), zsaf213. [doi:10.1093/sleep/zsaf213](https://doi.org/10.1093/sleep/zsaf213)
 
-## Main Components
+The published manuscript is included in [`docs/LG_Manuscript.pdf`](docs/LG_Manuscript.pdf).
 
-### Core Functions
-- **fcnStateSpace_Loop_TN.m**: Implements the Mackey-Glass model for ventilation
-- **fcnEMAlgorithm_TN_v5.m**: Core EM algorithm for parameter estimation
-- **fcnEMAlgorithm_TN_realData.m**: Wrapper for applying EM to real respiratory data
-- **fcnApplyMG.m**: Applies Mackey-Glass model with specific parameters and computes error
-- **fcnArousalEvent.m**: Detects and quantifies arousal events
-- **fcnGetLoopGain2.m**: Calculates loop gain (measure of control system stability)
+## Repository Structure
 
-### Utility Functions
-- **fcnAdjustPath.m**: Adjusts file paths for cross-platform compatibility
-- **fcnGetDbxPfx.m**: Returns the Dropbox prefix path based on the operating system
-- **fcnGet_unitFunction.m**: Helper function for step responses
-- **fcnGet_xss_a.m**: Calculates steady-state value for a given parameter set
-- **fcnSetOutPath.m**: Sets up output paths for results
-- **filter_study.m**: Locates and filters specific study files
-
-### Runner Scripts
-- **main.m**: Main entry point for batch processing studies
-- **mainRun.m**: Processes a single study file
-- **recompute_LG.m**: Script for recalculating loop gain values
-- **recompute_LG_Run.m**: Helper function for recomputing loop gain for a specific study
-
-## Usage
-1. Configure the desired cohort(s) in `main.m`
-2. Adjust parameters as needed:
-   - `run`: Set to "parallel" for parallel processing or "series" for sequential
-   - `version`: Set to "smooth" or "non-smooth" for different preprocessing approaches
-3. Execute `main.m` to process all studies in the specified cohort(s)
-
-Example:
-```matlab
-% In main.m
-cohort = {'MGH_high_CAI_V2'; 'MGH_SS_OSA_V2'};
-run = "parallel";
-version = "non-smooth";
-% Then run the script
+```
+HLG_Mackey-Glass/
+  docs/                  Published paper
+  matlab/                MATLAB EM algorithm (parameter estimation)
+  python/                Python analysis and figure generation package
+  _original/             Untouched backup copies of all original files
 ```
 
-## Data Format
-Input data should be in CSV format with the following key columns:
-- Ventilation_ABD: Abdominal ventilation signal
-- d_i_ABD: Inspiratory drive (non-smooth)
-- d_i_ABD_smooth: Inspiratory drive (smoothed)
-- arousal_locs: Binary indicators of arousal locations
-- nrem_starts, nrem_ends: Indices marking NREM sleep segments
-- rem_starts, rem_ends: Indices marking REM sleep segments
+### `matlab/` -- EM Parameter Estimation (MATLAB)
 
-## Output
-The code generates CSV files with the original data plus additional columns:
-- Parameter estimates (Alpha, gamma, tau)
-- Loop gain estimates (LG_rem, LG_nrem)
-- Estimated ventilation signals (Vo_est1, Vo_est2)
-- Scaled ventilation estimates (Vo_est_scaled1, Vo_est_scaled2)
-- Arousal estimations (Arousal1, Arousal2)
-- Error metrics (rmse_Vo)
+The core Expectation-Maximization algorithm that fits an augmented Mackey-Glass ventilatory control model to 8-minute segments of RIP data. Estimates loop gain (LG), controller gain (gamma), circulation delay (tau), and arousal parameters.
 
-## Requirements
-- MATLAB (developed and tested on R2019b or later)
-- Parallel Computing Toolbox (optional, for parallel processing)
+See [`matlab/README.md`](matlab/README.md) for setup and usage.
 
-## Authors
-This code was developed for research purposes in sleep respiratory analysis.
+### `python/` -- Analysis, Visualization, and Figure Generation (Python)
 
-## References
-The implementation is based on the Mackey-Glass equations for modeling physiological control systems, and uses EM algorithm for parameter estimation in the presence of unobserved variables.
+A complete Python package (`hlg`) for post-processing EM output, statistical analysis, and generating all publication figures. Includes the self-similarity (SS) pipeline integration, cohort comparisons, CPAP prediction, altitude analysis, and full-night "eye test" visualizations.
+
+See [`python/README.md`](python/README.md) for setup and usage.
+
+## Paper Figure Mapping
+
+Every figure in the published paper can be reproduced from this codebase:
+
+| Figure | Description | Code |
+|--------|-------------|------|
+| Fig. 1 | Six 8-min segment examples with EM fits | `python/src/hlg/visualization/segments.py` |
+| Fig. 2 | Full-night "eye test" overview with LG hooks | `python/src/hlg/visualization/full_night.py` |
+| Fig. 3 | LG / gamma / tau boxplots across cohorts | `python/scripts/run_group_analysis.py` |
+| Fig. 4 | Swimmer plots and LG bar graphs | `python/scripts/run_ss_relationship.py` |
+| Fig. 5 | SS vs LG scatter with polynomial regression | `python/scripts/run_ss_relationship.py` |
+| Fig. 6 | NREM vs REM LG boxplots | `python/scripts/run_ss_relationship.py` |
+| Fig. 7 | Altitude LG histograms and spaghetti plots | `python/scripts/run_altitude_analysis.py` |
+| Fig. 8 | CPAP failure prediction (ROC/PR/calibration) | `python/scripts/run_cpap_analysis.py` |
+
+To generate all figures at once:
+
+```bash
+cd python
+uv sync --extra dev
+uv run python -m scripts.generate_all_figures
+```
+
+## Pipeline Overview
+
+```
+RIP Signal (from PSG)
+        |
+        v
+  [Self-Similarity Detection]  -->  SS scores, stable regions
+        |
+        v
+  [Preprocessing & Segmentation]  -->  8-min NREM/REM windows
+        |
+        v
+  [EM Algorithm (MATLAB)]  -->  gamma, tau, alpha, Vmax, LG per segment
+        |
+        v
+  [Post-Processing (Python)]  -->  outlier smoothing, quality filtering
+        |
+        v
+  [Analysis & Figures (Python)]  -->  cohort comparisons, scatter plots,
+                                      full-night overviews, CPAP prediction
+```
+
+## License
+
+This code is licensed under CC BY-NC 4.0 (Attribution-NonCommercial 4.0). See [LICENSE](LICENSE) for details.
+
+## Data Availability
+
+Data are available at [bdsp.io](https://bdsp.io/) upon request to the corresponding author.

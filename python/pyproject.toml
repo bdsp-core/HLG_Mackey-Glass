@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hlg"
+version = "0.1.0"
+description = "Loop Gain estimation and analysis for sleep-disordered breathing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "scikit-learn",
+    "mne",
+    "h5py",
+    "hdf5storage",
+    "ruptures",
+    "seaborn",
+    "uncertainties",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hlg"]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes (unused imports, undefined names, etc.)
+    "B",   # flake8-bugbear (common pitfalls like mutable defaults)
+    "C4",  # flake8-comprehensions (simplify list/dict/set comprehensions)
+    "UP",  # pyupgrade (modernize syntax for target Python version)
+]
+ignore = [
+    "E501",  # line-too-long — already handled by the formatter
+    "B905",  # zip-without-strict — this codebase iterates parallel arrays whose
+             # lengths are always equal by construction; adding strict=True would
+             # change behaviour (raising on mismatch rather than silently truncating)
+    "E712",  # comparison-to-True/False — numpy element-wise `arr == True` is NOT
+             # equivalent to `arr` (the latter tests array truthiness and raises).
+             # This rule is designed for scalar Python code, not numpy.
+]
+
+[tool.ruff.format]
+indent-style = "space"
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
