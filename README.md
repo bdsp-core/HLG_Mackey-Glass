@@ -110,4 +110,4 @@ This code is licensed under CC BY-NC 4.0 (Attribution-NonCommercial 4.0). See [L
 
 ## Data Availability
 
-Data are available at [bdsp.io](https://bdsp.io/) upon request to the corresponding author.
+Data and code are available at [bdsp.io/content/hlg-data-code/2.0/](https://bdsp.io/content/hlg-data-code/2.0/). Preprocessed CSV files for the 4 example patients used in the paper figures are included in [`python/data/paper_examples/`](python/data/paper_examples/).

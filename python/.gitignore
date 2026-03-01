@@ -23,13 +23,11 @@ env/
 .DS_Store
 Thumbs.db
 
-# Data artifacts (large files — obtain from bdsp.io)
+# Data artifacts (large files)
 *.hf5
 *.h5
 *.mat
 *.hdf5
-data/paper_examples/*.csv
-!data/paper_examples/README.md
 data/raw_h5/
 data/pipeline_output/
 

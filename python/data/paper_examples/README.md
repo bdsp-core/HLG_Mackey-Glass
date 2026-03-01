@@ -24,12 +24,9 @@ the paper's Figure 1 (per-segment EM fits) and Figure 2 (full-night overviews).
 | E | 5 (NREM OSA) | seg 6 | 54600–59400 | 0.11 | 0.10 | 38s | Hypopneas, low LG |
 | F | 7 (HLG OSA) | seg 14 | 75300–80100 | 0.39 | 0.33 | 27s | Hypopneas, moderate LG |
 
-## Obtaining Data
+## Data Source
 
-Data files are not included in the repository due to size (~75–88 MB each).
-Data are available at [bdsp.io](https://bdsp.io/) upon request to the corresponding author.
-
-Once obtained, place the CSV files in this directory (`python/data/paper_examples/`).
+Data and code are available at [bdsp.io/content/hlg-data-code/2.0/](https://bdsp.io/content/hlg-data-code/2.0/). The preprocessed CSV files are included in this directory.
 
 ## Optional: Raw H5 Files
 
