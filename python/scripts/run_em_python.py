@@ -8,7 +8,7 @@ alpha, and reconstructed ventilation waveforms.
 
 Usage:
     # Single study:
-    python -m scripts.run_em_python --input data/em_example/Study_example.csv
+    python -m scripts.run_em_python --input data/paper_examples/HLG_OSA_Study_7.csv
 
     # All studies in a folder:
     python -m scripts.run_em_python --input-dir data/em_input/ --output-dir data/em_output/
@@ -53,7 +53,7 @@ def main():
     else:
         # Default: process the example file
         script_dir = os.path.dirname(__file__)
-        example = os.path.join(script_dir, "..", "data", "em_example", "Study_example.csv")
+        example = os.path.join(script_dir, "..", "data", "paper_examples", "HLG_OSA_Study_7.csv")
         if os.path.exists(example):
             input_files = [example]
             print(f"No input specified — using example: {example}")

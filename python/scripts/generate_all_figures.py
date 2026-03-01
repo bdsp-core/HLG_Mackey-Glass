@@ -34,6 +34,7 @@ import time
 
 # Each entry maps a short name to the script module path.
 FIGURE_SCRIPTS: dict[str, str] = {
+    "paper": "scripts.run_paper_figures",
     "cohort": "scripts.run_group_analysis",
     "cpap": "scripts.run_cpap_analysis",
     "ss_relationship": "scripts.run_ss_relationship",

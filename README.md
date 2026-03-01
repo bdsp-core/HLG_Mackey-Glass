@@ -48,8 +48,8 @@ cd python
 uv sync --extra dev        # Install dependencies
 uv run python -m pytest    # Run tests (19 pass)
 
-# Run the full demo pipeline on an example patient
-uv run python -m scripts.run_full_pipeline_demo
+# Reproduce paper Figure 1 + 2 for all 4 example patients (~12s)
+uv run python -m scripts.run_paper_figures
 
 # Generate all publication figures
 uv run python -m scripts.generate_all_figures
@@ -61,8 +61,8 @@ Every figure in the published paper can be reproduced from this codebase:
 
 | Figure | Description | Script |
 |--------|-------------|--------|
-| Fig. 1 | Per-segment EM fits with CO2 model | `scripts/run_figure1_demo.py` |
-| Fig. 2 | Full-night overview with LG hooks | `scripts/run_full_night_example.py` |
+| Fig. 1 | Per-segment EM fits with CO2 model | `scripts/run_paper_figures.py` |
+| Fig. 2 | Full-night overview with LG hooks | `scripts/run_paper_figures.py` |
 | Fig. 3 | LG / gamma / tau boxplots across cohorts | `scripts/run_group_analysis.py` |
 | Fig. 4 | Swimmer plots and LG bar graphs | `scripts/run_ss_relationship.py` |
 | Fig. 5 | SS vs LG scatter with polynomial regression | `scripts/run_ss_relationship.py` |

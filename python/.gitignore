@@ -25,14 +25,17 @@ Thumbs.db
 
 # Data artifacts (large files — obtain from bdsp.io)
 *.hf5
+*.h5
 *.mat
 *.hdf5
-data/em_example/*.csv
-!data/em_example/README.md
+data/paper_examples/*.csv
+!data/paper_examples/README.md
+data/raw_h5/
+data/pipeline_output/
 
 # Intermediate results (generated from full cohort data)
 interm_Results/
 bars/
 
 # Keep pre-generated figures in the repo for reference
-# (figures/demo/ and figures/publication/ are tracked)
+# (figures/paper/ and figures/publication/ are tracked)
