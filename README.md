@@ -48,6 +48,9 @@ cd python
 uv sync --extra dev        # Install dependencies
 uv run python -m pytest    # Run tests (19 pass)
 
+# Reproduce exact paper Figure 1 panels A–F (~20s)
+uv run python -m scripts.run_paper_figures --paper-panels
+
 # Reproduce paper Figure 1 + 2 for all 4 example patients (~12s)
 uv run python -m scripts.run_paper_figures
 

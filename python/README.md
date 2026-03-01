@@ -60,7 +60,7 @@ hlg_v2/
 │   │   └── stable_ss.py           # plot_SS, create_length_histogram
 │   └── reporting.py               # save_output, create_report
 ├── scripts/
-│   ├── run_paper_figures.py       # Reproduce paper Fig 1 + Fig 2 for all 4 patients
+│   ├── run_paper_figures.py       # Reproduce paper Fig 1 (A–F) + Fig 2 for all 4 patients
 │   ├── run_end_to_end.py          # Full pipeline: raw H5 → preprocess → EM → validate
 │   ├── run_em_python.py           # Run EM on any study CSV
 │   ├── run_group_analysis.py      # Cohort boxplots (Fig. 3)
@@ -102,7 +102,15 @@ All dependencies are declared in `pyproject.toml` and installed automatically.
 
 ## Quick Start
 
-### Reproduce the paper figures
+### Reproduce the exact paper Figure 1 panels (A–F)
+
+```bash
+uv run python -m scripts.run_paper_figures --paper-panels
+```
+
+Generates the 6 exact panels from the published Figure 1 with full publication-quality formatting: dual CO₂ traces, arousal shading, demographics header, SpO₂ min/max labels, 7-parameter results box, and τ arrow annotations. Takes ~20 seconds.
+
+### Reproduce paper figures (all segments)
 
 ```bash
 uv run python -m scripts.run_paper_figures
@@ -141,6 +149,40 @@ upAlpha, upgamma, uptau, V_o_est, h, u_min = run_em_on_segment(
 )
 LG = compute_loop_gain(0.05, float(upgamma[-1]), u_min)
 ```
+
+---
+
+## Paper Figure 1 Panel Generation
+
+The `--paper-panels` flag on `run_paper_figures.py` generates the exact 6 panels (A–F) from the published Figure 1, using the precise segment mappings documented in [`data/paper_examples/README.md`](data/paper_examples/README.md).
+
+### Panel mapping
+
+| Panel | Study | Diagnosis | Segment | LG | Description |
+|-------|-------|-----------|---------|-----|-------------|
+| A | 99 | High CAI | 1 | ~1.87 | Cheyne-Stokes breathing |
+| B | 99 | High CAI | 14 | ~3.56 | Extreme CSR |
+| C | 97 | HLG OSA | 8 | ~1.00 | Obstructive apneas |
+| D | 97 | HLG OSA | 20 | ~1.10 | Obstructive with higher LG |
+| E | 5 | NREM OSA | 6 | ~0.11 | Hypopneas with low LG |
+| F | 7 | HLG OSA | 14 | ~0.39 | Hypopneas, moderate LG |
+
+### Visual elements per panel
+
+Each panel includes the full set of publication-quality annotations matching the original manuscript:
+
+- **Abdominal effort** — raw mechanical activity trace
+- **Manual vs. estimated arousals** — sleep disruption timing comparison
+- **Respiratory events** — colour-coded by type (RERA, hypopnea, mixed/central/obstructive apnea)
+- **Disturbance U(t)** — combined mechanical + chemical drive component with 0/1 labels
+- **SpO₂ trace** — with min/max % labels
+- **Observed vs. modelled ventilation** — with grey arousal shading bars
+- **Modelled CO₂** — dual traces showing non-delayed (dashed) and delayed (solid) signals, with calibration shading and τ arrow
+- **7-parameter results box** — LG, γ, τ, v_max, L, α, RMSE
+- **Demographics header** — Sex, Age, AHI, OAI, CAI, MAI, HI, SS
+- **Duration scale bar** — with sleep stage label
+
+Output: `figures/paper/figure1/fig1_panel_{A..F}.png` at 900 DPI.
 
 ---
 
