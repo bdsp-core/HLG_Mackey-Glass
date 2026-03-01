@@ -506,8 +506,135 @@ def generate_paper_panels() -> None:
 # Figure 2: Full-night overview with LG hooks
 # ─────────────────────────────────────────────────────────────────────
 
+def _find_row_location(loc: int, row_ids: list[np.ndarray]) -> tuple[int, int]:
+    """Map global sample index to (x_within_row, row_index)."""
+    for i, row in enumerate(row_ids):
+        match = np.where(loc == row)[0]
+        if len(match) > 0:
+            return int(match[0]), i
+    raise ValueError(f"Sample {loc} not found in any row")
+
+
+def _compute_summary_stats(T: pd.DataFrame, Fs: int) -> dict:
+    """Compute summary statistics header from CSV data."""
+    n_samples = len(T)
+    signal_duration_h = round(n_samples / Fs / 3600, 2)
+
+    apnea = T["Apnea"].values.astype(float)
+    stages = T["Stage"].values.astype(float)
+
+    # Count central apneas (value 3) and central hypopneas (value 4)
+    # Apnea encoding: 1=obstructive, 2=mixed, 3=central, 4=hypopnea
+    central_apneas = 0
+    central_hypopneas = 0
+    for val, grp in groupby(apnea):
+        if np.isfinite(val) and int(val) == 3:
+            central_apneas += 1
+        elif np.isfinite(val) and int(val) == 4:
+            central_hypopneas += 1
+
+    # Sleep time in hours (stages 1-4, excluding wake=5)
+    sleep_mask = np.isin(stages, [1, 2, 3, 4])
+    sleep_hours = np.sum(sleep_mask) / Fs / 3600
+    cai = round(central_apneas / sleep_hours, 1) if sleep_hours > 0 else 0
+    cahi = round((central_apneas + central_hypopneas) / sleep_hours, 1) if sleep_hours > 0 else 0
+
+    # SS percentage from per-segment scores
+    ss_scores = T["nrem_SS_score"].dropna().values
+    ss_pct = round(float(np.mean(ss_scores) * 100), 1) if len(ss_scores) > 0 else 0
+
+    return {
+        "signal duration (h)": signal_duration_h,
+        "central apneas": central_apneas,
+        "central hypopneas": central_hypopneas,
+        "cai": cai,
+        "cahi": cahi,
+        "SS%": ss_pct,
+    }
+
+
+def _add_lg_hooks_csv(
+    ax: plt.Axes,
+    nrem_starts: np.ndarray,
+    nrem_ends: np.ndarray,
+    lg_values: np.ndarray,
+    row_ids: list[np.ndarray],
+    nrow: int,
+    row_height: int,
+    Fs: int,
+    apnea: np.ndarray,
+) -> None:
+    """Draw LG bracket annotations matching the paper's style.
+
+    For each NREM segment, draws a horizontal bracket spanning the
+    segment with vertical hooks at each end and the LG value centered
+    above.  Segments with < 4 respiratory events are drawn faded.
+    """
+    len_x = len(row_ids[-1])
+
+    for i in range(min(len(nrem_starts), len(lg_values))):
+        st = nrem_starts[i]
+        end = nrem_ends[i]
+        lg_val = lg_values[i]
+
+        if not np.isfinite(lg_val) or lg_val <= 0:
+            continue
+
+        try:
+            x_st, y_st = _find_row_location(st, row_ids)
+            x_end, y_end = _find_row_location(min(end, row_ids[0][-1]), row_ids)
+        except ValueError:
+            continue
+
+        # Vertical offset: alternate between two levels to avoid overlap
+        up_st = y_st * row_height + 0.425 * row_height
+        up_end = y_end * row_height + 0.425 * row_height
+        yy = up_st if i % 2 == 0 else up_st + 0.075 * row_height
+        yy_ = up_end if i % 2 == 0 else up_end + 0.075 * row_height
+        hook = yy - 0.05 * row_height
+        hook_ = yy_ - 0.05 * row_height
+        shift = yy - 0.025 * row_height if i % 2 == 0 else yy + 0.01 * row_height
+        shift_ = yy_ - 0.025 * row_height if i % 2 == 0 else yy_ + 0.01 * row_height
+        va = "top" if i % 2 == 0 else "bottom"
+
+        # Count respiratory events in this segment for confidence
+        seg_apnea = apnea[st:end]
+        n_events = len(_find_events(seg_apnea > 0))
+        lg_alpha = 1.0 if n_events >= 4 else 0.3
+        hook_alpha = 0.5 if lg_alpha == 1 else 0.3
+
+        tag_text = f"{lg_val:.2f}"
+        pad = 15 * Fs
+
+        if y_st == y_end:
+            # Segment fits in one row — draw bracket with hooks
+            ax.plot([x_st + pad, x_end - pad], [yy, yy], "k", lw=0.5, alpha=hook_alpha)
+            ax.plot([x_st + pad] * 2, [yy, hook], "k", lw=0.5, alpha=hook_alpha)
+            ax.plot([x_end - pad] * 2, [yy, hook], "k", lw=0.5, alpha=hook_alpha)
+            x = (x_st + x_end) / 2
+            ax.text(x, shift, tag_text, fontsize=6, ha="center", va=va, alpha=lg_alpha)
+        else:
+            # Segment crosses row boundary — split bracket
+            ax.plot([x_st + pad, len_x], [yy, yy], "k", lw=0.5, alpha=hook_alpha)
+            ax.plot([x_st + pad] * 2, [yy, hook], "k", lw=0.5, alpha=hook_alpha)
+            ax.plot([0, x_end - pad], [yy_, yy_], "k", lw=0.5, alpha=hook_alpha)
+            ax.plot([x_end - pad] * 2, [yy_, hook_], "k", lw=0.5, alpha=hook_alpha)
+            half_win = 4 * 60 * Fs
+            if x_st + half_win <= len_x:
+                ax.text(x_st + half_win, shift, tag_text, fontsize=6, ha="center", va=va, alpha=lg_alpha)
+            else:
+                ax.text(x_end - half_win, shift_, tag_text, fontsize=6, ha="center", va=va, alpha=lg_alpha)
+
+
 def generate_full_night_from_csv(study_info: dict) -> None:
-    """Generate full-night overview with LG hooks directly from CSV data."""
+    """Generate full-night overview with LG hooks directly from CSV data.
+
+    Matches the paper's Figure 2 style including:
+    - Summary statistics header (signal duration, central apneas/hypopneas, CAI, CAHI, SS%)
+    - LG bracket annotations with numeric values over each NREM segment
+    - SS breathing oscillation "o" markers
+    - Complete legend with scale bar, event types, and LG bracket example
+    """
     csv_path = os.path.join(DATA_DIR, study_info["csv"])
     T = pd.read_csv(csv_path)
     Fs = int(T["Fs"].iloc[0])
@@ -519,14 +646,12 @@ def generate_full_night_from_csv(study_info: dict) -> None:
     signal = T["ABD"].values.astype(float)
     stages = T["Stage"].values.astype(float)
     apnea = T["Apnea"].values.astype(float)
-    spo2 = T["SpO2"].values.astype(float)
+    d_i_abd_smooth = T["d_i_ABD_smooth"].values.astype(float)
 
     # LG per-segment data
     nrem_starts = T["nrem_starts"].dropna().values.astype(int)
     nrem_ends = T["nrem_ends"].dropna().values.astype(int)
     lg_nrem = T["LG_nrem"].dropna().values
-    g_nrem = T["G_nrem"].dropna().values
-    d_nrem = T["D_nrem"].dropna().values
 
     # Row layout: each row = 1 hour
     block = 60 * 60 * Fs
@@ -534,6 +659,8 @@ def generate_full_night_from_csv(study_info: dict) -> None:
     n_rows = (n_samples + block - 1) // block
     row_ids = [np.arange(i * block, min((i + 1) * block, n_samples)) for i in range(n_rows)]
     row_ids.reverse()
+    # Extend the last (now first) row to cover the final partial hour
+    row_ids[0] = np.arange(row_ids[0][0], n_samples)
     nrow = len(row_ids)
 
     fig = plt.figure(figsize=(14, 9))
@@ -568,47 +695,45 @@ def generate_full_night_from_csv(study_info: dict) -> None:
                 ax.plot([loc, loc + len_j], [ri * row_height - shift] * 2, c=label_color[int(val)], lw=1.5)
             loc += len_j
 
-    # LG hooks
-    for seg_idx in range(min(len(nrem_starts), len(lg_nrem))):
-        s = nrem_starts[seg_idx]
-        e = nrem_ends[seg_idx]
-        lg_val = lg_nrem[seg_idx]
+    # SS breathing oscillation markers (where d_i_ABD_smooth drops below 1)
+    below_thresh = (d_i_abd_smooth < 1).astype(float)
+    for ri in range(nrow):
+        loc = 0
+        for val, grp in groupby(below_thresh[row_ids[ri]]):
+            len_j = len(list(grp))
+            if val == 1 and len_j > Fs:  # at least 1 second
+                mid = loc + len_j // 2
+                ax.text(mid, ri * row_height - 5, "o", c="r", fontsize=6,
+                        ha="center", va="center")
+            loc += len_j
 
-        if not np.isfinite(lg_val) or lg_val <= 0:
-            continue
-
-        mid = (s + e) // 2
-        row_idx = nrow - 1 - mid // block
-        if row_idx < 0 or row_idx >= nrow:
-            continue
-
-        x_pos = mid % block
-        hook_height = min(lg_val * 3, 12)
-        hook_y = row_idx * row_height + 5
-
-        ax.plot([x_pos, x_pos], [hook_y, hook_y + hook_height], c="k", lw=0.8)
-        ax.plot([x_pos - 50, x_pos + 50], [hook_y] * 2, c="k", lw=0.8)
+    # LG bracket hooks with numeric values
+    _add_lg_hooks_csv(ax, nrem_starts, nrem_ends, lg_nrem, row_ids, nrow, row_height, Fs, apnea)
 
     # Layout
     max_row_len = max(len(x) for x in row_ids)
+    len_x = len(row_ids[-1])
     ax.set_xlim([0, max_row_len])
     ax.axis("off")
+
+    # ── Summary statistics header ──────────────────────────────────────
+    stats = _compute_summary_stats(T, Fs)
+    offset = row_height * (nrow - 1) + 17
+    dx = len_x // 10
+    for i, (key, val) in enumerate(stats.items()):
+        tag = f"{key}:\n{val}"
+        ax.text(i * dx, offset, tag, fontsize=7, ha="left", va="bottom")
 
     # Hour labels
     for ri in range(nrow):
         hour = nrow - 1 - ri
         ax.text(-200, ri * row_height, f"{hour}h", fontsize=9, ha="right", va="center")
 
-    # Title
-    ax.text(
-        max_row_len / 2, (nrow - 1) * row_height + 14,
-        f"{group} — Patient {patient_id}  ({len(nrem_starts)} NREM segments)",
-        fontsize=12, ha="center", va="bottom", fontweight="bold",
-    )
-
-    # Legend
+    # ── Bottom legend ──────────────────────────────────────────────────
     y_legend = -10
-    fz = 10
+    fz = 11
+
+    # Sleep-state line types
     line_types = ["NREM", "REM", "Wake"]
     line_colors = ["k", "b", "r"]
     for i, (color, e_type) in enumerate(zip(line_colors, line_types)):
@@ -616,6 +741,7 @@ def generate_full_night_from_csv(study_info: dict) -> None:
         ax.plot([x, x + 50 * Fs], [y_legend] * 2, c=color, lw=0.8)
         ax.text(x + 25 * Fs, y_legend - 3, e_type, fontsize=fz, c=color, ha="center", va="top")
 
+    # Event types
     event_types = ["Apnea", "Hypopnea"]
     ev_colors = ["b", "m"]
     for i, (color, e_type) in enumerate(zip(ev_colors, event_types)):
@@ -623,19 +749,32 @@ def generate_full_night_from_csv(study_info: dict) -> None:
         ax.plot([x, x + 100 * Fs], [y_legend] * 2, c=color, lw=2)
         ax.text(x + 50 * Fs, y_legend - 3, e_type, fontsize=fz, ha="center", va="top")
 
-    # LG hook legend
-    lg_x = max_row_len - 4 * 60 * Fs
-    ax.plot([lg_x, lg_x], [y_legend, y_legend + 4], c="k", lw=0.8)
-    ax.plot([lg_x - 50, lg_x + 50], [y_legend] * 2, c="k", lw=0.8)
-    ax.text(lg_x + 100, y_legend + 2, "Estimated LG", fontsize=fz - 1, ha="left", va="center")
+    # Estimated LG bracket legend
+    dur_8min = 8 * 60 * Fs
+    left = len_x - 4.75 * dx
+    right = left + dur_8min
+    ax.text(left + dur_8min / 2, y_legend - 3, "Estimated LG", color="k",
+            fontsize=fz - 1, ha="center", va="top")
+    ax.plot([left, right], [y_legend] * 2, color="k", lw=0.5)
+    ax.plot([left] * 2, [y_legend - 1, y_legend], color="k", lw=0.5)
+    ax.plot([right] * 2, [y_legend - 1, y_legend], color="k", lw=0.5)
 
-    # Duration scale bar
+    # Detected SS breathing oscillation marker
+    ax.text(len_x - 60 * Fs * 2.5 - 2 * dx, y_legend - 3, "Detected SS\nbreathing oscillation",
+            color="k", fontsize=fz - 1, ha="center", va="top")
+    ax.text(len_x - 60 * Fs * 2.5 - 2 * dx, y_legend, "o", c="r",
+            fontsize=fz, ha="center", va="bottom")
+
+    # Duration scale bar with "(abd RIP)" label
     dur_min = 5
     dur_samples = dur_min * 60 * Fs
-    ax.plot([max_row_len - dur_samples, max_row_len], [y_legend] * 2, color="k", lw=1)
-    ax.plot([max_row_len - dur_samples] * 2, [y_legend - 0.5, y_legend + 0.5], color="k", lw=1)
-    ax.plot([max_row_len] * 2, [y_legend - 0.5, y_legend + 0.5], color="k", lw=1)
-    ax.text(max_row_len - dur_samples / 2, y_legend + 1, f"{dur_min} min", fontsize=fz, ha="center", va="bottom")
+    ax.plot([len_x - dur_samples, len_x], [y_legend] * 2, color="k", lw=1)
+    ax.plot([len_x - dur_samples] * 2, [y_legend - 0.5, y_legend + 0.5], color="k", lw=1)
+    ax.plot([len_x] * 2, [y_legend - 0.5, y_legend + 0.5], color="k", lw=1)
+    ax.text(len_x - dur_samples / 2, y_legend + 1, f"{dur_min} min", fontsize=fz,
+            ha="center", va="bottom")
+    ax.text(len_x - dur_samples / 2, y_legend - 1, "(abd RIP)", color="k",
+            fontsize=8, ha="center", va="top")
 
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, "full_night", f"full_night_{patient_id}_{group.replace(' ', '_')}.png")
