@@ -6,6 +6,14 @@ Generates:
   - Figure 1: Per-segment EM fit panels (re-runs EM live) for all 4 patients
   - Figure 2: Full-night overview with LG hooks for all 4 patients
 
+Figure 1 panel mapping (from paper):
+  Panel A: Study 99 (High CAI), NREM seg 1,  rows 9000-13800,  LG~1.87
+  Panel B: Study 99 (High CAI), NREM seg 14, rows 82200-87000, LG~3.85
+  Panel C: Study 97 (HLG OSA),  NREM seg 8,  rows 64800-69600, LG~0.97
+  Panel D: Study 97 (HLG OSA),  NREM seg 20, rows 158400-163200, LG~1.10
+  Panel E: Study  5 (NREM OSA), NREM seg 6,  rows 54600-59400, LG~0.11
+  Panel F: Study  7 (HLG OSA),  NREM seg 14, rows 75300-80100, LG~0.39
+
 Data required in data/paper_examples/:
   - figure1_studies.csv          (metadata mapping)
   - NREM_OSA_Study_5.csv         (patient d1c690da)
@@ -26,6 +34,7 @@ Usage:
     python -m scripts.run_paper_figures
     python -m scripts.run_paper_figures --figure1-only
     python -m scripts.run_paper_figures --fullnight-only
+    python -m scripts.run_paper_figures --paper-panels
 """
 
 import argparse
@@ -62,6 +71,52 @@ BDSP_MAP = {
     99: "sub-S0001116587855_ses-1.h5",
 }
 
+# Exact paper Figure 1 panel-to-segment mapping.
+# Each entry: (study_number, 0-based NREM segment index)
+PAPER_PANELS = {
+    "A": (99, 0),   # High CAI seg 1  → LG ~1.87
+    "B": (99, 13),  # High CAI seg 14 → LG ~3.85
+    "C": (97, 7),   # HLG OSA  seg 8  → LG ~0.97
+    "D": (97, 19),  # HLG OSA  seg 20 → LG ~1.10
+    "E": (5, 5),    # NREM OSA seg 6  → LG ~0.11
+    "F": (7, 13),   # HLG OSA  seg 14 → LG ~0.39
+}
+
+
+def _find_events(arr):
+    """Find contiguous regions of True values → list of (start, end) tuples."""
+    arr = np.asarray(arr, dtype=bool)
+    if len(arr) == 0:
+        return []
+    diff = np.diff(arr.astype(int))
+    starts = list(np.where(diff == 1)[0] + 1)
+    ends = list(np.where(diff == -1)[0] + 1)
+    if arr[0]:
+        starts.insert(0, 0)
+    if arr[-1]:
+        ends.append(len(arr))
+    return list(zip(starts, ends))
+
+
+def _load_demographics():
+    """Load patient demographics from figure1_studies.csv."""
+    csv_path = os.path.join(DATA_DIR, "figure1_studies.csv")
+    if not os.path.exists(csv_path):
+        return {}
+    df = pd.read_csv(csv_path)
+    demo = {}
+    for _, row in df.iterrows():
+        demo[int(row["study"])] = {
+            "Sex": row["Sex"],
+            "Age": int(round(row["age"])),
+            "AHI": round(row["AHI_3pct"], 1),
+            "OAI": round(row["OAI"], 1),
+            "CAI": round(row["CAI_3pct"], 1),
+            "MAI": 0.0,
+            "HI": round(row.get("SS_pct", 0), 2),
+        }
+    return demo
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Figure 1: Per-segment EM panels
@@ -78,11 +133,24 @@ def plot_segment_panel(
     Fs: int,
     stage: str,
     out_path: str,
+    demographics: dict | None = None,
+    ss_score: float | None = None,
 ) -> None:
-    """Generate Figure 1 style multi-panel segment plot."""
+    """Generate Figure 1 style multi-panel segment plot.
+
+    Matches the original MATLAB publication figure including:
+    - Manual + estimated arousal panels
+    - Disturbance 0/1 scale labels
+    - SpO2 min/max percentage labels
+    - Grey arousal shading on the ventilation panel
+    - Two CO2 traces (non-delayed + delayed) with calibration period
+    - Double-headed tau arrow annotation
+    - Patient demographics header
+    - Full 7-parameter box (LG, gamma, tau, V_max, L, alpha, RMSE)
+    """
     K = len(seg)
     fs = Fs
-    fz = 13
+    fz = 14
 
     gamma = float(upgamma[-1])
     tau_sec = float(uptau[-1]) / Fs
@@ -115,13 +183,17 @@ def plot_segment_panel(
     Vd_est_scaled = Vd_est * Scale
 
     rmse = float(np.sqrt(np.mean((V_o - Vo_est_scaled) ** 2)))
+    Vmax = round(float(np.nanmax(Vo_est_scaled)), 2)
 
     ABD = seg["ABD"].values.astype(np.float64)
     di_abd = seg["d_i_ABD"].values.astype(np.float64)
     Disturbance = di_abd + alpha * (1.0 - di_abd)
     spo2 = seg["SpO2"].values.astype(np.float64)
     y_tech = seg["Apnea"].values.astype(np.float64)
+
+    # Arousal masks
     a_locs = (Arousal > 0).astype(float)
+    a_locs_bool = Arousal > 0
     a_locs[a_locs != 1] = np.nan
 
     # CO2 via Euler integration
@@ -136,11 +208,13 @@ def plot_segment_panel(
 
     time_min = np.arange(K) / fs / 60
     t0, t1 = time_min[0], time_min[-1]
+    len_x = time_min[-1]
 
-    fig = plt.figure(figsize=(16, 9))
+    fig = plt.figure(figsize=(18, 8))
     ax = fig.add_subplot(111)
     label_txt_dic = {"fontsize": fz, "ha": "right", "va": "center"}
 
+    # ── Panel 1: Abdominal effort ─────────────────────────────────────
     factor = 4
     maxi = np.nanmax(ABD) - np.nanmin(ABD)
     ABD_n = ABD / maxi * factor * 2 if maxi > 0 else ABD
@@ -152,40 +226,64 @@ def plot_segment_panel(
     ax.plot(time_min, ABD_n, c="k", lw=0.5, alpha=0.75)
     ax.text(time_min[0] - 0.3, 0, "Abdominal effort", **label_txt_dic)
 
-    offset = max_y + 8.5
-    ax.plot([t0, t1], [offset, offset], c="k", lw=0.5, linestyle="dashed")
-    ax.plot(time_min, a_locs * offset, c="k", lw=4)
-    ax.text(time_min[0] - 0.3, offset, "Estimated arousals", **label_txt_dic)
+    # ── Panel 2: Arousals (manual + estimated) ────────────────────────
+    offset_ar = max_y + 8.5
+    if "Arousals" in seg.columns:
+        manual_ar = seg["Arousals"].values.astype(float).copy()
+        manual_ar[manual_ar != 1] = np.nan
+        ax.plot([t0, t1], [offset_ar, offset_ar], c="k", lw=0.5, linestyle="dashed")
+        ax.plot(time_min, manual_ar * offset_ar, c="k", lw=4)
+        ax.text(time_min[0] - 0.3, offset_ar, "Manual arousals", **label_txt_dic)
+        offset_est = offset_ar - 1
+        ax.plot([t0, t1], [offset_est, offset_est], c="k", lw=0.5, linestyle="dashed")
+        ax.plot(time_min, a_locs * offset_est, c="k", lw=4)
+        ax.text(time_min[0] - 0.3, offset_est, "Estimated arousals", **label_txt_dic)
+    else:
+        ax.plot([t0, t1], [offset_ar, offset_ar], c="k", lw=0.5, linestyle="dashed")
+        ax.plot(time_min, a_locs * offset_ar, c="k", lw=4)
+        ax.text(time_min[0] - 0.3, offset_ar, "Estimated arousals", **label_txt_dic)
 
+    # ── Panel 3: Manual respiratory events ────────────────────────────
     label_color = [None, "b", "g", "c", "m", "r", None, "b"]
     offset_events = max_y + 6.5
     ax.plot([t0, t1], [offset_events, offset_events], c="k", lw=0.5, linestyle="dashed")
-    ax.text(time_min[0] - 0.3, offset_events, "Resp. events", **label_txt_dic)
+    ax.text(time_min[0] - 0.3, offset_events, "Manual resp. events", **label_txt_dic)
     loc = 0
-    for val, group in groupby(y_tech):
-        len_j = len(list(group))
+    for val, grp in groupby(y_tech):
+        len_j = len(list(grp))
         if np.isfinite(val) and int(val) < len(label_color) and label_color[int(val)] is not None:
             t_start = loc / fs / 60
             t_end = (loc + len_j) / fs / 60
             ax.plot([t_start, t_end], [offset_events] * 2, c=label_color[int(val)], lw=3)
         loc += len_j
 
+    # ── Panel 4: Disturbance U(t) with 0/1 labels ────────────────────
     offset_u = max_y + 3.75
     factor_u = 2
+    ax.text(time_min[0] - 0.05, offset_u + factor_u, "1", fontsize=fz - 5, ha="right", va="center")
+    ax.text(time_min[0] - 0.05, offset_u, "0", fontsize=fz - 5, ha="right", va="center")
     ax.plot(time_min, di_abd * factor_u + offset_u, c="k", lw=1, alpha=0.25)
     ax.plot(time_min, Disturbance * factor_u + offset_u, c="k", lw=2, alpha=0.5)
     ax.text(time_min[0] - 0.3, offset_u + 1, "Disturbance ($U$)", **label_txt_dic)
     ax.fill_between(time_min, offset_u, offset_u + factor_u, fc="k", alpha=0.1)
 
+    # ── Panel 5: SpO2 with min/max % labels ───────────────────────────
     offset_spo2 = min_y - 8.5
     factor_spo2 = 5
     spo2_clean = spo2.copy()
     spo2_clean[spo2_clean < 80] = np.nan
-    if np.any(np.isfinite(spo2_clean)):
-        spo2_n = (spo2_clean - np.nanmin(spo2_clean)) / (np.nanmax(spo2_clean) - np.nanmin(spo2_clean)) * factor_spo2
+    has_spo2 = np.any(np.isfinite(spo2_clean))
+    spo2_max = int(np.nanmax(spo2_clean)) if has_spo2 else "NaN"
+    spo2_min = int(np.nanmin(spo2_clean)) if has_spo2 else "NaN"
+    if has_spo2:
+        spo2_range = np.nanmax(spo2_clean) - np.nanmin(spo2_clean)
+        spo2_n = (spo2_clean - np.nanmin(spo2_clean)) / spo2_range * factor_spo2 if spo2_range > 0 else np.full_like(spo2_clean, factor_spo2 / 2)
         ax.plot(time_min, spo2_n + offset_spo2, c="y", lw=1)
     ax.text(time_min[0] - 0.3, offset_spo2 + factor_spo2 / 2, "SpO$_{2}$", **label_txt_dic)
+    ax.text(time_min[0] - 0.05, offset_spo2 + factor_spo2, f"{spo2_max}%", fontsize=fz - 5, ha="right", va="top")
+    ax.text(time_min[0] - 0.05, offset_spo2, f"{spo2_min}%", fontsize=fz - 5, ha="right", va="bottom")
 
+    # ── Panel 6: Ventilation + grey arousal shading ───────────────────
     offset_V = min_y - 17
     factor_V = 5
     maxi_v = max(np.nanmax(V_o), np.nanmax(Vo_est_scaled))
@@ -198,57 +296,143 @@ def plot_segment_panel(
     ax.plot([t0, t1], [offset_V, offset_V], c="k", lw=0.5, linestyle="dashed")
     ax.plot([t0, t1], [offset_V + factor_V, offset_V + factor_V], c="k", lw=0.5, linestyle="dashed")
 
+    # Grey arousal shading bars
+    yu_bar = offset_V + max(float(np.nanmax(Vo_n)), float(np.nanmax(Vo_est_n)))
+    for st, end in _find_events(a_locs_bool):
+        ax.fill_between(
+            [st / fs / 60, end / fs / 60], offset_V, yu_bar,
+            color="k", alpha=0.1, ec="none",
+        )
+
+    # ── Panel 7: CO2 (two traces + calibration + tau arrow) ──────────
     offset_CO2 = min_y - 12
     factor_CO2 = 3
-    mask_steps = int(tau_sec * 2.5 * fs)
-    CO2_n = (
-        (CO2 - np.nanmin(CO2[mask_steps:])) / (np.nanmax(CO2[mask_steps:]) - np.nanmin(CO2[mask_steps:])) * factor_CO2
-        if mask_steps < K
-        else CO2
-    )
+    mask_duration = tau_sec * 2.5
+    mask_steps = int(mask_duration * fs)
+
+    if mask_steps < K:
+        co2_min = np.nanmin(CO2[mask_steps:])
+        co2_range = np.nanmax(CO2[mask_steps:]) - co2_min
+        CO2_n = (CO2 - co2_min) / co2_range * factor_CO2 if co2_range > 0 else CO2
+    else:
+        CO2_n = CO2
+
+    # Non-delayed (instantaneous) CO2 trace
+    CO2_non_delayed = np.copy(CO2_n)
+    CO2_non_delayed[:mask_steps] = np.nan
+    ax.plot(time_min, CO2_non_delayed + offset_CO2, c="k", lw=1, linestyle="dashed", alpha=0.1)
+
+    # Delayed CO2 trace (shifted by tau)
     CO2_delayed = np.roll(CO2_n, delay_steps)
     CO2_delayed[: delay_steps + mask_steps] = np.nan
     ax.plot(time_min, CO2_delayed + offset_CO2, c="b", lw=1.5, linestyle="dashed", alpha=0.75)
-    ax.text(time_min[0] - 0.3, offset_CO2 + factor_CO2 / 2, "CO$_{2}$ (model)", **label_txt_dic)
 
-    # Annotations
-    len_x = time_min[-1]
-    scores = [r"$\bf{LG}$", "$\\gamma$", "$\\tau$", "RMSE"]
-    values = [f"{LG:.2f}", f"{gamma:.2f}", f"{tau_sec:.0f}s", f"{rmse:.2f}"]
-    for i, (tag_label, val) in enumerate(zip(scores, values)):
-        x = len_x / 2 + (i - 1.5) * len_x / 8
-        ax.text(x, offset_V - 1, tag_label, fontsize=fz, ha="center", va="bottom")
-        ax.text(x, offset_V - 1.25, val, fontsize=fz - 2, ha="center", va="top")
+    ax.text(time_min[0] - 0.3, offset_CO2 + factor_CO2 / 2, r"Modeled CO$_2$ (x)", **label_txt_dic)
 
-    line_w = len_x / 15
-    y_label = offset_V - 1
-    y_value = offset_V - 1.25
-    obs_x0 = 0
-    ax.plot([obs_x0, obs_x0 + line_w], [y_label] * 2, c="k", lw=2)
-    ax.text(obs_x0 + line_w / 2, y_value, "Observed", fontsize=fz - 2, ha="center", va="top")
-    mod_x0 = len_x / 6
-    ax.plot([mod_x0, mod_x0 + line_w], [y_label] * 2, c="b", lw=2)
-    ax.text(mod_x0 + line_w / 2, y_value, "Modeled", fontsize=fz - 2, ha="center", va="top")
+    # Tau arrow annotation
+    finite_idx = np.where(np.isfinite(CO2_delayed))[0]
+    if len(finite_idx) > 0:
+        first_idx = finite_idx[0]
+        arrow_right = first_idx / fs / 60
+        arrow_left = (first_idx - delay_steps) / fs / 60
+        arrow_y = CO2_delayed[first_idx] + 0.25 + offset_CO2
+        ax.annotate(
+            "", xy=(arrow_right, arrow_y), xytext=(arrow_left, arrow_y),
+            arrowprops=dict(arrowstyle="<->", color="k", lw=1),
+        )
+        mid_x = (arrow_right + arrow_left) / 2
+        mid_y = arrow_y + 0.25
+        va_arr = "bottom"
+        if mid_y > 4:
+            mid_y = arrow_y - 0.25
+            va_arr = "top"
+        ax.text(mid_x, mid_y, r"$\tau$", fontsize=fz - 2, ha="center", va=va_arr)
 
-    event_types = ["RERA", "Hypopnea", "Mixed", "Central", "Obstructive"]
+        # Calibration shading
+        ax.fill_between(
+            [t0, arrow_left], offset_CO2, offset_CO2 + factor_CO2,
+            color="k", alpha=0.1, ec="none",
+        )
+        ax.text(time_min[0] + 0.05, offset_CO2 + 0.25, "Calibrating..",
+                fontsize=fz - 4, fontstyle="italic", ha="left", va="bottom")
+
+    # ── Annotations ───────────────────────────────────────────────────
+
+    # Demographics header
+    if demographics:
+        metrics = ["Sex", "Age", "AHI", "OAI", "CAI", "MAI", "HI", "SS"]
+        dx_demo = len_x / 30
+        y_demo = max_y + 10
+        demo_with_ss = dict(demographics)
+        if ss_score is not None:
+            demo_with_ss["SS"] = ss_score
+        for i, metric in enumerate(metrics):
+            if metric in demo_with_ss:
+                x = 0.1 + dx_demo * i * 2
+                ax.text(x + dx_demo / 2, y_demo, metric, fontsize=fz, ha="center", va="bottom")
+                val = demo_with_ss[metric]
+                ax.text(x + dx_demo / 2, y_demo - 0.25, str(val), fontsize=fz - 2, ha="center", va="top")
+
+    # Event legend (top right)
+    event_types = ["RERA", "Hypopnea", "Mixed\napnea", "Central\napnea", "Obstructive\napnea"]
     event_colors = ["r", "m", "c", "g", "b"]
     dx = len_x / 25
     for i, (color, e_type) in enumerate(zip(event_colors, event_types)):
-        x = len_x - 0.5 - dx * i * 2
+        x = len_x - 0.05 - dx * i * 2
         ax.plot([x, x - dx], [max_y + 10 - 0.5] * 2, c=color, lw=3)
-        ax.text(x - dx / 2, max_y + 10, e_type, fontsize=fz - 3, ha="center", va="bottom")
+        ax.text(x - dx / 2, max_y + 10, e_type, fontsize=fz - 2, ha="center", va="bottom")
 
+    # Ventilation legend (bottom left)
+    dx_leg = len_x / 22.5
+    offset_leg = offset_V - 1
+    for i, (line_label, c) in enumerate([("Observed", "k"), ("Modeled", "b")]):
+        x = dx_leg * i * 1.5
+        ax.plot([x, x + dx_leg], [offset_leg + 0.25] * 2, c=c, lw=2)
+        ax.text(x + dx_leg / 2, offset_leg, line_label, fontsize=fz - 2, ha="center", va="top")
+
+    # Full 7-parameter box: LG, gamma, tau, V_max, L, alpha, RMSE
+    scores = [r"$\bf{LG}$", "$\\gamma$", "$\\tau$", "$v_{max}$", "$L$", "$\\alpha$", "RMSE"]
+    values = [
+        r"$\bf{" + f"{LG:.2f}" + "}$",
+        f"{gamma:.1f}", f"{tau_sec:.1f} sec", f"{Vmax}", f"{L}", f"{alpha:.1f}", f"{rmse:.2f}",
+    ]
+    for i, (tag_label, val) in enumerate(zip(scores, values)):
+        minus = len(scores) // 2
+        x = len_x / 2 + ((i - minus) * 2) * dx_leg
+        ax.text(x, offset_leg - 0.5, tag_label, fontsize=fz, ha="center", va="bottom")
+        ax.text(x, offset_leg - 0.75, val, fontsize=fz - 2, ha="center", va="top")
+
+    # Duration scale bar (bottom right)
     sec = 30
-    ax.plot([len_x - sec / 60, len_x], [offset_V - 0.5] * 2, color="k", lw=1.5)
-    ax.plot([len_x - sec / 60] * 2, [offset_V - 0.75, offset_V - 0.25], color="k", lw=1.5)
-    ax.plot([len_x] * 2, [offset_V - 0.75, offset_V - 0.25], color="k", lw=1.5)
-    ax.text(len_x - sec / 120, offset_V - 1, f"{sec} sec\n({stage})", color="k", fontsize=fz - 2, ha="center", va="top")
+    ax.plot([len_x - sec / 60, len_x], [offset_leg + 0.25] * 2, color="k", lw=1.5)
+    ax.plot([len_x - sec / 60] * 2, [offset_leg, offset_leg + 0.5], color="k", lw=1.5)
+    ax.plot([len_x] * 2, [offset_leg, offset_leg + 0.5], color="k", lw=1.5)
+    ax.text(len_x - sec / 120, offset_leg, f"{sec} sec\n({stage})", color="k", fontsize=fz - 2, ha="center", va="top")
 
     ax.set_xlim([-1, len_x + 0.5])
     ax.axis("off")
     plt.tight_layout()
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
+
+
+def _run_em_on_seg(T, Fs, seg_idx, nrem_starts, nrem_ends):
+    """Extract a single NREM segment and run EM on it."""
+    start = int(nrem_starts[seg_idx])
+    end = int(nrem_ends[seg_idx]) - 1
+    if start == 0:
+        start = 1
+        end += 1
+    end = min(end, len(T) - 1)
+    seg = T.iloc[start : end + 1].copy().reset_index(drop=True)
+
+    t0 = time.time()
+    upAlpha, upgamma, uptau, V_o_est, h, u_min = run_em_on_segment(
+        seg, w=5 * Fs, L=0.05, gamma_init=0.5, tau_init=15 * Fs, version="non-smooth"
+    )
+    elapsed = time.time() - t0
+    LG = compute_loop_gain(0.05, float(upgamma[-1]), u_min)
+    return seg, upAlpha, upgamma, uptau, V_o_est, h, u_min, LG, elapsed
 
 
 def generate_figure1(study_info: dict, n_segments: int = 3) -> None:
@@ -258,32 +442,64 @@ def generate_figure1(study_info: dict, n_segments: int = 3) -> None:
     Fs = int(T["Fs"].iloc[0])
     patient_id = str(T["patient_tag"].iloc[0])[:8]
     group = study_info["group"]
+    study_num = study_info["study"]
 
     nrem_starts = T["nrem_starts"].dropna().values.astype(int)
     nrem_ends = T["nrem_ends"].dropna().values.astype(int)
+    ss_scores = T["nrem_SS_score"].dropna().values
     n = min(n_segments, len(nrem_starts))
+
+    demographics = _load_demographics().get(study_num)
 
     print(f"\n  [{group}] Patient {patient_id} — {len(nrem_starts)} NREM segments, processing {n}")
 
     for seg_idx in range(n):
-        start = int(nrem_starts[seg_idx])
-        end = int(nrem_ends[seg_idx]) - 1
-        if start == 0:
-            start = 1
-            end += 1
-        end = min(end, len(T) - 1)
-        seg = T.iloc[start : end + 1].copy().reset_index(drop=True)
-
-        t0 = time.time()
-        upAlpha, upgamma, uptau, V_o_est, h, u_min = run_em_on_segment(
-            seg, w=5 * Fs, L=0.05, gamma_init=0.5, tau_init=15 * Fs, version="non-smooth"
+        seg, upAlpha, upgamma, uptau, V_o_est, h, u_min, LG, elapsed = (
+            _run_em_on_seg(T, Fs, seg_idx, nrem_starts, nrem_ends)
         )
-        elapsed = time.time() - t0
-        LG = compute_loop_gain(0.05, float(upgamma[-1]), u_min)
+        ss = round(float(ss_scores[seg_idx]), 2) if seg_idx < len(ss_scores) else None
         print(f"    Seg {seg_idx + 1}: LG={LG:.2f}, γ={upgamma[-1]:.2f}, τ={uptau[-1] / Fs:.0f}s ({elapsed:.1f}s)")
 
         out_path = os.path.join(FIG_DIR, "figure1", f"fig1_{group.replace(' ', '_')}_{patient_id}_seg{seg_idx + 1}.png")
-        plot_segment_panel(seg, upAlpha, upgamma, uptau, V_o_est, h, u_min, Fs, "NREM", out_path)
+        plot_segment_panel(
+            seg, upAlpha, upgamma, uptau, V_o_est, h, u_min, Fs, "NREM", out_path,
+            demographics=demographics, ss_score=ss,
+        )
+
+
+def generate_paper_panels() -> None:
+    """Generate exactly the 6 panels (A-F) shown in the paper's Figure 1.
+
+    Uses the PAPER_PANELS mapping to select specific NREM segments
+    that match the published figure.
+    """
+    demographics = _load_demographics()
+    study_to_csv = {s["study"]: s for s in STUDIES}
+
+    for panel, (study_num, seg_idx) in sorted(PAPER_PANELS.items()):
+        info = study_to_csv[study_num]
+        csv_path = os.path.join(DATA_DIR, info["csv"])
+        T = pd.read_csv(csv_path)
+        Fs = int(T["Fs"].iloc[0])
+        patient_id = str(T["patient_tag"].iloc[0])[:8]
+        group = info["group"]
+
+        nrem_starts = T["nrem_starts"].dropna().values.astype(int)
+        nrem_ends = T["nrem_ends"].dropna().values.astype(int)
+        ss_scores = T["nrem_SS_score"].dropna().values
+
+        seg, upAlpha, upgamma, uptau, V_o_est, h, u_min, LG, elapsed = (
+            _run_em_on_seg(T, Fs, seg_idx, nrem_starts, nrem_ends)
+        )
+        ss = round(float(ss_scores[seg_idx]), 2) if seg_idx < len(ss_scores) else None
+        print(f"    Panel {panel}: Study {study_num} ({group}) seg {seg_idx + 1} → "
+              f"LG={LG:.2f}, γ={upgamma[-1]:.2f}, τ={uptau[-1] / Fs:.0f}s ({elapsed:.1f}s)")
+
+        out_path = os.path.join(FIG_DIR, "figure1", f"fig1_panel_{panel}.png")
+        plot_segment_panel(
+            seg, upAlpha, upgamma, uptau, V_o_est, h, u_min, Fs, "NREM", out_path,
+            demographics=demographics.get(study_num), ss_score=ss,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -442,11 +658,13 @@ def main():
     parser = argparse.ArgumentParser(description="Generate paper figures for all 4 example patients")
     parser.add_argument("--figure1-only", action="store_true", help="Only generate Figure 1 panels")
     parser.add_argument("--fullnight-only", action="store_true", help="Only generate full-night figures")
+    parser.add_argument("--paper-panels", action="store_true", help="Generate exactly the 6 panels (A-F) from the paper")
     parser.add_argument("--segments", type=int, default=2, help="Number of NREM segments per patient for Figure 1 (default: 2)")
     args = parser.parse_args()
 
-    do_fig1 = not args.fullnight_only
-    do_fullnight = not args.figure1_only
+    do_fig1 = not args.fullnight_only and not args.paper_panels
+    do_fullnight = not args.figure1_only and not args.paper_panels
+    do_paper = args.paper_panels
 
     os.makedirs(os.path.join(FIG_DIR, "figure1"), exist_ok=True)
     os.makedirs(os.path.join(FIG_DIR, "full_night"), exist_ok=True)
@@ -461,7 +679,12 @@ def main():
 
     t_total = time.time()
 
-    if do_fig1:
+    if do_paper:
+        print(f"\n{'─' * 70}")
+        print("  FIGURE 1: Exact paper panels A–F")
+        print(f"{'─' * 70}")
+        generate_paper_panels()
+    elif do_fig1:
         print(f"\n{'─' * 70}")
         print(f"  FIGURE 1: Per-segment EM panels ({args.segments} segments each)")
         print(f"{'─' * 70}")
