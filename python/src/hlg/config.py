@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Resolve the project root (hlg_v2/) relative to this file's location,
+# Resolve the project root (python/) relative to this file's location,
 # regardless of the working directory the script is launched from.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DATA_DIR = _PROJECT_ROOT / "data"
@@ -70,7 +70,7 @@ class HLGConfig:
     segment_block_size_min: int = 8
 
     # ── File Paths ────────────────────────────────────────────────────────
-    # All default paths resolve relative to hlg_v2/data/.
+    # All default paths resolve relative to python/data/.
     # Override via environment variables for different machines / layouts.
     csv_dir: str = field(default_factory=lambda: os.environ.get("HLG_CSV_DIR", str(_DATA_DIR / "csv_files")))
     hf5_dir: str = field(default_factory=lambda: os.environ.get("HLG_HF5_DIR", str(_DATA_DIR / "hf5_examples")))
