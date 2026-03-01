@@ -33,11 +33,10 @@ import h5py
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.signal import decimate
 
+from hlg.core.preprocessing import do_initial_preprocessing, clip_normalize_signals
 from hlg.core.ventilation import create_ventilation_trace
 from hlg.em.em_algorithm import run_em_on_segment
 from hlg.em.loop_gain_calc import compute_loop_gain
@@ -62,14 +61,19 @@ STUDY_MAP = {
 # ─────────────────────────────────────────────────────────────────────
 
 def load_raw_h5(h5_path: str, target_fs: int = 10) -> tuple[pd.DataFrame, dict]:
-    """Read a raw BDSP H5 recording and resample to target_fs.
+    """Read a raw BDSP H5 recording and preprocess using the paper's pipeline.
 
-    Raw H5 layout:
-        signals/abd, signals/chest, signals/spo2, signals/ptaf, ...
-        annotations/stage, annotations/resp, annotations/arousal
+    Applies the full preprocessing chain described in the paper:
+      1. Read raw signals + annotations at 200Hz
+      2. 60Hz notch filter + bandpass [0, 10] Hz for respiratory channels
+      3. Polyphase resample to target_fs (10Hz)
+      4. 5th-95th percentile clip + z-score normalization for ABD
+      5. SpO2 clamped to [60, 100]
+      6. Map stage/resp/arousal annotation encodings
+      7. Trim to sleep period
 
-    Returns a DataFrame at target_fs with columns matching the HLG
-    pipeline convention, plus a header dict.
+    Uses the same ``do_initial_preprocessing`` and ``clip_normalize_signals``
+    functions that the SS pipeline uses, ensuring identical signal conditioning.
     """
     original_fs = 200
 
@@ -81,59 +85,67 @@ def load_raw_h5(h5_path: str, target_fs: int = 10) -> tuple[pd.DataFrame, dict]:
         arousal_raw = f["annotations/arousal"][:, 0].astype(np.float64)
 
     n_raw = len(abd_raw)
-    factor = original_fs // target_fs
 
-    # Resample signals via decimation
-    abd = decimate(abd_raw, factor, zero_phase=True)
-    spo2_dec = decimate(spo2_raw, factor, zero_phase=True)
+    # Build DataFrame with lowercase column names matching what
+    # do_initial_preprocessing expects for channel-type detection.
+    raw_df = pd.DataFrame({
+        "abd": abd_raw,
+        "spo2": spo2_raw,
+        "stage": stage_raw,
+        "resp": resp_raw,
+        "arousal": arousal_raw,
+    })
 
-    # Resample annotations by taking every factor-th sample (nearest-neighbor)
-    stage = stage_raw[::factor]
-    resp = resp_raw[::factor]
-    arousal = arousal_raw[::factor]
+    # Filter and resample using the paper's preprocessing pipeline:
+    # - 60Hz notch on abd (analog channel)
+    # - Bandpass [0, 10] Hz on abd (respiratory channel)
+    # - Polyphase resample abd to target_fs
+    # - Nearest-neighbor resample for stage/resp/arousal/spo2
+    processed = do_initial_preprocessing(raw_df, new_Fs=target_fs, original_Fs=original_fs)
 
-    n = min(len(abd), len(stage), len(resp), len(arousal), len(spo2_dec))
-    abd = abd[:n]
-    spo2_dec = spo2_dec[:n]
-    stage = stage[:n]
-    resp = resp[:n]
-    arousal = arousal[:n]
+    # Normalize using the paper's clipping + z-score pipeline:
+    # - ABD: 5th-95th percentile clip -> z-score -> secondary adaptive clip
+    # - SpO2: clamped to [60, 100]
+    # - Annotation columns (stage, arousal, resp) are skipped automatically
+    processed = clip_normalize_signals(processed, sample_rate=target_fs, br_trace=["abd", "abd"])
 
-    # Map stage encoding: raw {0=W?, 1=N1, 2=N2, 3=N3, 4=REM, 5=W, 9=unscored}
-    # → CSV {1=N1, 2=N2, 3=N3, 4=REM, 5=W, NaN=unscored/lights-off}
-    stage_mapped = stage.copy()
-    stage_mapped[stage == 0] = np.nan
-    stage_mapped[stage == 9] = np.nan
+    abd = processed["abd"].values.astype(np.float64)
+    spo2 = processed["spo2"].values.astype(np.float64)
+    stage = processed["stage"].values.astype(np.float64)
+    resp = processed["resp"].values.astype(np.float64)
+    arousal = processed["arousal"].values.astype(np.float64)
 
-    # Map respiratory events: raw {0=none, 1=obstructive, 2=central, 3=mixed, 7=hypopnea, 9=RERA}
-    # → CSV {0=none, 1=obstructive, 2=central, 3=mixed, 4=hypopnea, 5=RERA}
+    # Map stage encoding: raw {0,9} -> NaN (unscored / lights-off)
+    stage[stage == 0] = np.nan
+    stage[stage == 9] = np.nan
+
+    # Map respiratory events: raw {7->4 hypopnea, 9->5 RERA}
     resp_mapped = np.zeros_like(resp)
-    resp_mapped[resp == 1] = 1  # obstructive
-    resp_mapped[resp == 2] = 2  # central
-    resp_mapped[resp == 3] = 3  # mixed
-    resp_mapped[resp == 7] = 4  # hypopnea
-    resp_mapped[resp == 9] = 5  # RERA
+    resp_mapped[resp == 1] = 1
+    resp_mapped[resp == 2] = 2
+    resp_mapped[resp == 3] = 3
+    resp_mapped[resp == 7] = 4
+    resp_mapped[resp == 9] = 5
 
     # Trim to sleep period: first to last scored epoch
-    scored = np.where(np.isfinite(stage_mapped) & (stage_mapped > 0))[0]
+    scored = np.where(np.isfinite(stage) & (stage > 0))[0]
     if len(scored) == 0:
         raise ValueError(f"No valid sleep staging found in {h5_path}")
     start_idx = scored[0]
     end_idx = scored[-1] + 1
 
+    factor = original_fs // target_fs
     data = pd.DataFrame({
         "ABD": abd[start_idx:end_idx],
-        "SpO2": spo2_dec[start_idx:end_idx],
-        "Stage": stage_mapped[start_idx:end_idx],
+        "SpO2": spo2[start_idx:end_idx],
+        "Stage": stage[start_idx:end_idx],
         "Apnea": resp_mapped[start_idx:end_idx],
         "arousal": arousal[start_idx:end_idx],
     })
 
-    # ind0/ind1: index into original 200Hz recording
     data["ind0"] = (np.arange(len(data)) + start_idx) * factor
     data["ind1"] = data["ind0"] + factor
 
-    # Patient tag from filename
     basename = os.path.basename(h5_path)
     patient_tag = basename.replace(".h5", "")
 
@@ -335,11 +347,10 @@ def process_study(study_num: int, skip_em: bool = False) -> None:
     print(f"      Delta: {len(data) - len(ref)} rows ({(len(data) - len(ref)) / hdr['newFs']:.1f}s)")
 
     # Step 2: Preprocess
-    print(f"\n  [2] Preprocessing: ventilation + segmentation...")
+    print("\n  [2] Preprocessing: ventilation + segmentation...")
     t0 = time.time()
     export = preprocess_to_csv(data, hdr, out_csv)
     nrem_starts = export["nrem_starts"].dropna()
-    nrem_ends = export["nrem_ends"].dropna()
     ref_nrem = ref["nrem_starts"].dropna()
     print(f"      NREM segments: {len(nrem_starts)} (reference: {len(ref_nrem)})")
     print(f"      Saved: {os.path.basename(out_csv)}")
@@ -358,7 +369,7 @@ def process_study(study_num: int, skip_em: bool = False) -> None:
     print(f"      Saved: {os.path.basename(em_csv)}")
 
     # Step 4: Cross-validate
-    print(f"\n  [4] Cross-validating against reference...")
+    print("\n  [4] Cross-validating against reference...")
     cross_validate(em_results, ref_csv)
 
 
